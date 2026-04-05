@@ -16,13 +16,16 @@ if (!TELEGRAM_BOT_TOKEN) {
 }
 
 if (POLYMARKET_WALLETS.length === 0) {
-  throw new Error('Missing POLYMARKET_WALLETS (comma-separated wallet addresses)');
+  throw new Error('Missing POLYMARKET_WALLETS');
 }
 
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
 let chatId = TELEGRAM_CHAT_ID;
 
-// In-memory duplicate tracking (wallet -> trade keys)
+// 🔥 PAPER TRADING STORAGE
+const positions = [];
+
+// In-memory duplicate tracking
 const seenTradesByWallet = new Map();
 const debugLoggedWallets = new Set();
 
@@ -34,83 +37,96 @@ bot.onText(/\/start/, (msg) => {
   chatId = msg.chat.id;
   bot.sendMessage(
     chatId,
-    `✅ Tracking ${POLYMARKET_WALLETS.length} wallet(s). Polling every ${POLLING_MS / 1000}s.`
+    `✅ Tracking ${POLYMARKET_WALLETS.length} wallet(s)\n📊 Paper trading enabled\nPolling every ${POLLING_MS / 1000}s`
   );
 });
 
 bot.on('message', (msg) => {
-  if (!chatId) {
-    chatId = msg.chat.id;
-  }
+  if (!chatId) chatId = msg.chat.id;
 });
 
-function getTradeId(trade, fallbackWallet) {
+// 📊 VIEW POSITIONS
+bot.onText(/\/positions/, (msg) => {
+  const id = msg.chat.id;
+
+  if (positions.length === 0) {
+    return bot.sendMessage(id, "No paper trades yet.");
+  }
+
+  const latest = positions.slice(-5).map(p => {
+    return `🧠 ${p.title}\n${p.action} ${p.outcome}\nEntry: ${p.price}`;
+  }).join("\n\n");
+
+  bot.sendMessage(id, `📊 Last Trades:\n\n${latest}`);
+});
+
+// 📈 SIMPLE PNL
+bot.onText(/\/pnl/, (msg) => {
+  const id = msg.chat.id;
+
+  if (positions.length === 0) {
+    return bot.sendMessage(id, "No trades yet.");
+  }
+
+  const avg =
+    positions.reduce((sum, p) => sum + Number(p.price || 0), 0) / positions.length;
+
+  bot.sendMessage(id, `📈 Paper Stats\n\nTrades: ${positions.length}\nAvg Entry: ${avg.toFixed(3)}`);
+});
+
+function getTradeId(trade, wallet) {
   return (
     trade.id ||
     trade.activityId ||
     trade.txHash ||
-    `${fallbackWallet}:${trade.timestamp || trade.createdAt || ''}:${trade.slug || trade.market || trade.title || ''}:${trade.side || trade.type || ''}:${trade.price || trade.size || trade.amount || ''}`
+    `${wallet}:${trade.timestamp}:${trade.title}:${trade.price}`
   );
 }
 
 function normalizeAction(trade) {
-  const raw = String(trade.side || trade.action || trade.type || '').toUpperCase();
-
-  if (raw.includes('BUY') || raw.includes('BID')) return 'BUY';
-  if (raw.includes('SELL') || raw.includes('ASK')) return 'SELL';
-
+  const raw = String(trade.side || '').toUpperCase();
+  if (raw.includes('BUY')) return 'BUY';
+  if (raw.includes('SELL')) return 'SELL';
   return raw || 'UNKNOWN';
 }
 
 function normalizeTrade(trade, wallet) {
   return {
     wallet,
-    title: trade.title || trade.marketTitle || trade.question || trade.market || trade.slug || 'Unknown market',
+    title: trade.title || 'Unknown market',
     action: normalizeAction(trade),
-    outcome: trade.outcome || trade.outcomeName || trade.tokenName || trade.asset || 'Unknown',
-    price: trade.price ?? trade.executedPrice ?? trade.avgPrice ?? 'N/A',
+    outcome: trade.outcome || 'Unknown',
+    price: trade.price ?? 'N/A',
     tradeId: getTradeId(trade, wallet),
   };
 }
 
 async function fetchTrades(wallet) {
   const url = `https://data-api.polymarket.com/activity?user=${wallet}`;
-  const response = await fetch(url);
+  const res = await fetch(url);
 
-  if (!response.ok) {
-    throw new Error(`Polymarket API ${response.status} for ${wallet}`);
-  }
+  if (!res.ok) throw new Error(`API ${res.status}`);
 
-  const data = await response.json();
+  const data = await res.json();
 
   if (!debugLoggedWallets.has(wallet)) {
-    console.log(`First raw payload for ${wallet}:`, data?.[0] || data);
+    console.log(`First payload for ${wallet}:`, data?.[0]);
     debugLoggedWallets.add(wallet);
   }
 
-  if (!Array.isArray(data)) {
-    console.log(`Unexpected activity format for ${wallet}:`, data);
-    return [];
-  }
-
-  return data;
+  return Array.isArray(data) ? data : [];
 }
 
 async function checkWallet(wallet) {
   const trades = await fetchTrades(wallet);
   const seen = seenTradesByWallet.get(wallet);
 
-  if (!seen) return [];
-
   const fresh = [];
 
-  // API often returns newest first; reverse so alerts are oldest -> newest
   for (const trade of [...trades].reverse()) {
     const normalized = normalizeTrade(trade, wallet);
 
-    if (seen.has(normalized.tradeId)) {
-      continue;
-    }
+    if (seen.has(normalized.tradeId)) continue;
 
     seen.add(normalized.tradeId);
     fresh.push(normalized);
@@ -119,12 +135,24 @@ async function checkWallet(wallet) {
   return fresh;
 }
 
+// 🚀 MAIN EVENT
 async function notifyTrade(trade) {
   if (!chatId) return;
 
+  // 📊 SEND ALERT
   const message = `📊 Trade Detected\n\nWallet: ${trade.wallet}\nMarket: ${trade.title}\nAction: ${trade.action} ${trade.outcome}\nPrice: ${trade.price}`;
 
   await bot.sendMessage(chatId, message);
+
+  // 🔥 ADD TO PAPER TRADING
+  positions.push({
+    wallet: trade.wallet,
+    title: trade.title,
+    action: trade.action,
+    outcome: trade.outcome,
+    price: Number(trade.price),
+    timestamp: Date.now()
+  });
 }
 
 async function pollOnce() {
@@ -135,8 +163,8 @@ async function pollOnce() {
       for (const trade of newTrades) {
         await notifyTrade(trade);
       }
-    } catch (error) {
-      console.error(`Polling error for ${wallet}:`, error.message);
+    } catch (err) {
+      console.error(`Error for ${wallet}:`, err.message);
     }
   }
 }
@@ -146,7 +174,3 @@ pollOnce();
 
 console.log('Bot started.');
 console.log('Wallets:', POLYMARKET_WALLETS.join(', '));
-console.log('Polling interval:', `${POLLING_MS}ms`);
-if (!TELEGRAM_CHAT_ID) {
-  console.log('Send /start to the bot once so it knows where to send alerts.');
-}
