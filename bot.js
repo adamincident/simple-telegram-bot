@@ -13,10 +13,19 @@ bot.on('message', (msg) => {
 // simple Polymarket fetch
 async function fetchMarkets() {
   try {
-    const res = await fetch("https://gamma-api.polymarket.com/markets?active=true");
+    const res = await fetch("https://gamma-api.polymarket.com/markets");
     const data = await res.json();
 
-    return data.slice(0, 3);
+    // filter only GOOD markets
+    return data
+      .filter(m =>
+        m.active &&
+        m.outcomes &&
+        m.outcomes.length > 0 &&
+        m.outcomes.some(o => o.price !== null && o.price !== undefined)
+      )
+      .slice(0, 3);
+
   } catch (err) {
     console.error("Fetch error:", err);
     return [];
