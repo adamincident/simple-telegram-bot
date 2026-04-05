@@ -13,10 +13,10 @@ bot.on('message', (msg) => {
 // simple Polymarket fetch
 async function fetchMarkets() {
   try {
-    const res = await fetch("https://gamma-api.polymarket.com/markets");
+    const res = await fetch("https://gamma-api.polymarket.com/markets?active=true");
     const data = await res.json();
 
-    return data.slice(0, 3); // just take a few markets
+    return data.slice(0, 3);
   } catch (err) {
     console.error("Fetch error:", err);
     return [];
@@ -30,12 +30,15 @@ setInterval(async () => {
   const markets = await fetchMarkets();
 
   markets.forEach((m) => {
+    const yesPrice = m.outcomePrices?.[0] ?? "N/A";
+    const noPrice = m.outcomePrices?.[1] ?? "N/A";
+
     const message = `
 📊 Market Update
 
 🧠 ${m.question}
-💰 Yes Price: ${m.outcomePrices?.[0] || "?"}
-💰 No Price: ${m.outcomePrices?.[1] || "?"}
+💰 Yes: ${yesPrice}
+💰 No: ${noPrice}
     `;
 
     bot.sendMessage(CHAT_ID, message);
