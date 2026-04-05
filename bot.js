@@ -16,14 +16,16 @@ async function fetchMarkets() {
     const res = await fetch("https://gamma-api.polymarket.com/markets");
     const data = await res.json();
 
-    // filter only GOOD markets
     return data
-      .filter(m =>
-        m.active &&
-        m.outcomes &&
-        m.outcomes.length > 0 &&
-        m.outcomes.some(o => o.price !== null && o.price !== undefined)
-      )
+      .filter(m => {
+        if (!m.active) return false;
+
+        // ensure outcomes is an array
+        if (!Array.isArray(m.outcomes)) return false;
+
+        // ensure at least one valid price exists
+        return m.outcomes.some(o => o && o.price != null);
+      })
       .slice(0, 3);
 
   } catch (err) {
