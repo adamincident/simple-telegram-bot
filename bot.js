@@ -30,8 +30,16 @@ setInterval(async () => {
   const markets = await fetchMarkets();
 
   markets.forEach((m) => {
-    const yesPrice = m.outcomePrices?.[0] ?? "N/A";
-    const noPrice = m.outcomePrices?.[1] ?? "N/A";
+    let yesPrice = "N/A";
+    let noPrice = "N/A";
+
+    if (m.outcomes && Array.isArray(m.outcomes)) {
+      const yes = m.outcomes.find(o => o.name === "Yes");
+      const no = m.outcomes.find(o => o.name === "No");
+
+      yesPrice = yes?.price ?? "N/A";
+      noPrice = no?.price ?? "N/A";
+    }
 
     const message = `
 📊 Market Update
